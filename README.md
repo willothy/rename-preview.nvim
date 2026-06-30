@@ -30,14 +30,12 @@ is changed.
 
 ## Demo
 
-Rename a widely-used function and review the blast radius:
+Rename a widely-used type and review the blast radius:
 
 <img width="660" height="411" alt="Screenshot 2026-06-30 at 8 41 57 AM" src="https://github.com/user-attachments/assets/9ea11366-59dd-4a56-81f1-e23e4990d465" />
 
-
 The window fits its content, growing only up to the configured `width`/`height`
-(see below); taller renames scroll while the keymap hints — pinned to the
-window footer — stay visible.
+(see below).
 
 The accent bar down the left edge is colour-coded per card — green when every
 site is accepted, dim when none are, amber when partial, red when a conflict is
