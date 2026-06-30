@@ -15,6 +15,7 @@ local util = require("rename-preview.util")
 local config = require("rename-preview.config")
 local session_mod = require("rename-preview.session")
 local apply_mod = require("rename-preview.apply")
+local conflict = require("rename-preview.conflict")
 
 local has_lua_parser = pcall(vim.treesitter.get_parser, vim.api.nvim_create_buf(false, true), "lua")
 print("-- treesitter lua parser available: " .. tostring(has_lua_parser))
@@ -98,6 +99,53 @@ local session2 = session_mod.build({
 vim.api.nvim_buf_set_lines(sbuf, 0, -1, false, { "totally different content" })
 local result = apply_mod.apply(session2)
 check("stale edit skipped", result.skipped == 1 and result.applied == 0, ("applied=%d skipped=%d"):format(result.applied, result.skipped))
+
+-- Collision detection must ignore the new name when it only appears in comments
+-- or strings (a rename followed by a rename back used to falsely flag these).
+local function collision_session(lines, new_name)
+  -- A real, named file so the URI round-trips back to this buffer.
+  local f = vim.fn.tempname() .. ".lua"
+  vim.fn.writefile(lines, f)
+  local cbuf = vim.fn.bufadd(f)
+  vim.fn.bufload(cbuf)
+  vim.bo[cbuf].filetype = "lua"
+  if has_lua_parser then
+    vim.treesitter.get_parser(cbuf, "lua"):parse()
+  end
+  local curi = vim.uri_from_bufnr(cbuf)
+  -- Rename the `bar` declaration on line 2 (0-indexed line 1) to `new_name`.
+  local session = session_mod.build({
+    workspace_edit = { changes = { [curi] = { { range = range(1, 6, 9), newText = new_name } } } },
+    old_name = "bar",
+    new_name = new_name,
+    offset_encoding = "utf-16",
+    client_id = 1,
+    definitions = {},
+    config = config.options,
+  })
+  vim.fn.delete(f)
+  return session
+end
+
+if has_lua_parser then
+  -- `foo` appears only in a comment and a string → not a collision.
+  local s_doc = collision_session({
+    "-- foo is the old name",
+    "local bar = 1",
+    'local note = "foo"',
+  }, "foo")
+  check("comment/string occurrence is not a collision", conflict.count(s_doc) == 0, conflict.count(s_doc))
+else
+  print("ok   - (skipped comment/string collision check: no lua parser)")
+end
+
+-- A real code occurrence of the new name is still a collision.
+local s_code = collision_session({
+  "-- comment",
+  "local bar = 1",
+  "local foo = 2",
+}, "foo")
+check("real code occurrence is still a collision", conflict.count(s_code) >= 1, conflict.count(s_code))
 
 vim.fn.delete(tmp)
 vim.fn.delete(tmp2)

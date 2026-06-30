@@ -101,9 +101,48 @@ local function detect_overlaps(sites)
   end
 end
 
+--- Build a predicate that reports whether a (0-indexed) buffer position sits
+--- inside a comment or string, using the buffer's base Treesitter tree. This
+--- excludes documentation and prose — `---@param foo`, `// foo`, `"foo"` — from
+--- collision detection, since language servers never rename those, so a name
+--- left there after a rename is not a real conflict. Degrades to "never inside"
+--- when no parser is available.
+---@param bufnr integer
+---@return fun(lnum: integer, col: integer): boolean
+local function comment_or_string_predicate(bufnr)
+  local ok, parser = pcall(vim.treesitter.get_parser, bufnr)
+  if not ok or not parser then
+    return function()
+      return false
+    end
+  end
+  local trees = parser:parse()
+  local root = trees and trees[1] and trees[1]:root()
+  if not root then
+    return function()
+      return false
+    end
+  end
+
+  return function(lnum, col)
+    local node = root:named_descendant_for_range(lnum, col, lnum, col)
+    while node do
+      local t = node:type()
+      if t:find("comment", 1, true) or t:find("string", 1, true) then
+        return true
+      end
+      node = node:parent()
+    end
+    return false
+  end
+end
+
 --- Scan a file's buffer for pre-existing occurrences of `new_name` that are not
 --- part of the rename. Each such occurrence is recorded as a collision on the
 --- file group (attached to the nearest preceding site, or the group itself).
+--- Occurrences inside comments and strings are ignored — language servers do
+--- not rename those, so they are not real conflicts (this is what made a rename
+--- followed by a rename back falsely report the original name as a collision).
 ---@param group RenamePreview.FileGroup
 ---@param new_name string
 ---@param encoding "utf-8"|"utf-16"|"utf-32"
@@ -111,11 +150,12 @@ local function detect_collisions(group, new_name, encoding)
   local bufnr = util.uri_bufload(group.uri)
   local line_count = vim.api.nvim_buf_line_count(bufnr)
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, line_count, false)
+  local in_comment_or_string = comment_or_string_predicate(bufnr)
 
   for lnum0 = 0, #lines - 1 do
     local line = lines[lnum0 + 1]
     for _, col in ipairs(find_word(line, new_name)) do
-      if not covered_by_edit(group.sites, lnum0, col, encoding, line) then
+      if not covered_by_edit(group.sites, lnum0, col, encoding, line) and not in_comment_or_string(lnum0, col) then
         group.conflicts[#group.conflicts + 1] = {
           kind = "collision",
           message = ("`%s` already exists at line %d in this file"):format(new_name, lnum0 + 1),
