@@ -29,23 +29,8 @@ is changed.
 
 Rename a widely-used function and review the blast radius:
 
-```
-╭───────────────────────── rename-preview ──────────────────────────╮
-│                                                                    │
-│  getUser  →  fetchUser                                             │
-│  7 of 9 sites  ·  3 files  ·  1 conflict                          │
-│  ────────────────────────────────────────────────────────────    │
-│                                                                    │
-│ ▌[x] ▾ src/api/user.lua                                 3 sites ⚠1 │
-│ ▌    ⚠ `fetchUser` already exists at line 88 in this file         │
-│ ▌ ✓  12 │ - function M.getUser(id)                                │
-│ ▌       │ + function M.fetchUser(id)                  definition   │
-│ ▌ ·  40 │ -   return M.getUser(id)                                │
-│ ▌       │ +   return M.fetchUser(id)                        call   │
-│ ▌[x] ▾ src/handlers.lua                                    4 sites │
-│ ▌  ...                                                             │
-╰─ <Space> toggle · a/x all/none · o jump · ]c conflict · ⏎ apply ──╯
-```
+<img width="660" height="411" alt="Screenshot 2026-06-30 at 8 41 57 AM" src="https://github.com/user-attachments/assets/9ea11366-59dd-4a56-81f1-e23e4990d465" />
+
 
 The window fits its content, growing only up to the configured `width`/`height`
 (see below); taller renames scroll while the keymap hints — pinned to the
