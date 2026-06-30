@@ -31,21 +31,28 @@ Rename a widely-used function and review the blast radius:
 
 ```
 ╭───────────────────────── rename-preview ──────────────────────────╮
-│  Rename  getUser → fetchUser                                       │
-│  9/9 sites  ·  3 files  ·  1 conflict                              │
 │                                                                    │
-│ ▾ [x] src/api/user.lua    3 sites  ⚠ 1                            │
-│     ⚠ `fetchUser` already exists at line 88 in this file          │
-│   ● 12 │ - function M.getUser(id)                                 │
-│        │ + function M.fetchUser(id)   [definition]                │
-│   ● 40 │ -   return M.getUser(id)                                 │
-│        │ +   return M.fetchUser(id)   [call]                      │
-│ ▾ [x] src/handlers.lua    4 sites                                 │
-│   ...                                                              │
+│  getUser  →  fetchUser                                             │
+│  7 of 9 sites  ·  3 files  ·  1 conflict                          │
+│  ────────────────────────────────────────────────────────────    │
 │                                                                    │
+│ ▌[x] ▾ src/api/user.lua                                 3 sites ⚠1 │
+│ ▌    ⚠ `fetchUser` already exists at line 88 in this file         │
+│ ▌ ✓  12 │ - function M.getUser(id)                                │
+│ ▌       │ + function M.fetchUser(id)                  definition   │
+│ ▌ ·  40 │ -   return M.getUser(id)                                │
+│ ▌       │ +   return M.fetchUser(id)                        call   │
+│ ▌[x] ▾ src/handlers.lua                                    4 sites │
+│ ▌  ...                                                             │
+│  ────────────────────────────────────────────────────────────    │
 │  <Space> toggle  a all  x none  o jump  ]c conflict  ⏎ apply  q   │
 ╰────────────────────────────────────────────────────────────────────╯
 ```
+
+The accent bar down the left edge is colour-coded per card — green when every
+site is accepted, dim when none are, amber when partial, red when a conflict is
+present. The site under the cursor is highlighted as a whole. Role labels
+(`definition`, `call`, `write`, `read`) sit pinned to the right edge.
 
 ## Requirements
 

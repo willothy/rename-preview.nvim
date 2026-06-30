@@ -118,8 +118,19 @@ check("preview buffer created", ui_buf ~= nil)
 local rendered = vim.api.nvim_buf_get_lines(ui_buf, 0, -1, false)
 local joined = table.concat(rendered, "\n")
 check("preview shows old→new", joined:find("oldName", 1, true) and joined:find("newName", 1, true))
-check("preview shows role label", joined:find("[definition]", 1, true) ~= nil)
 check("preview shows conflict marker", joined:find("⚠", 1, true) ~= nil)
+
+-- Role labels are rendered as right-aligned virtual text, not buffer text.
+local ui_ns = vim.api.nvim_create_namespace("rename_preview_ui")
+local virt = ""
+for _, m in ipairs(vim.api.nvim_buf_get_extmarks(ui_buf, ui_ns, 0, -1, { details = true })) do
+  if m[4] and m[4].virt_text then
+    for _, chunk in ipairs(m[4].virt_text) do
+      virt = virt .. chunk[1]
+    end
+  end
+end
+check("preview shows role label", virt:find("definition", 1, true) ~= nil, virt)
 
 -- Close the UI window/buffer cleanly.
 for _, w in ipairs(vim.api.nvim_list_wins()) do

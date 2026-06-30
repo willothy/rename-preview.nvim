@@ -3,17 +3,22 @@
 --- Renders a session into a scratch buffer shown in a floating window. The
 --- buffer is non-modifiable; every change goes through `render`, which rebuilds
 --- the line list, the line→target metadata used by the key handlers, and the
---- extmark highlight list. Keymaps act on whatever file/site the cursor is on.
+--- extmark instruction list. Keymaps act on whatever file/site the cursor is on.
 
 local config = require("rename-preview.config")
 local session_mod = require("rename-preview.session")
 local conflict = require("rename-preview.conflict")
 local apply_mod = require("rename-preview.apply")
+local highlights = require("rename-preview.highlights")
 local util = require("rename-preview.util")
 
 local M = {}
 
+-- Static highlights/virtual text are drawn in NS; the moving "current card"
+-- background lives in its own namespace so it can be redrawn on every cursor
+-- move without rebuilding the buffer.
 local NS = vim.api.nvim_create_namespace("rename_preview_ui")
+local NS_CURSOR = vim.api.nvim_create_namespace("rename_preview_cursor")
 
 ---@class RenamePreview.UiState
 ---@field session RenamePreview.Session
@@ -65,8 +70,19 @@ local function add_segments(state, segments, meta)
   return add_line(state, text, meta, marks)
 end
 
-local ARROW = " → "
+--- Attach right-aligned virtual text to an already-emitted line.
+---@param state RenamePreview.UiState
+---@param lnum integer
+---@param chunks table[] {text, hl} pairs.
+local function add_virt(state, lnum, chunks)
+  state.marks[#state.marks + 1] = { line = lnum, virt_text = chunks, virt_text_pos = "right_align" }
+end
+
+local ARROW = "  →  "
 local GUTTER = " │ "
+local BAR = "▌"
+local BLANK_LNUM = "    "
+local MARK_FIELD = "   " -- three cells, matches " ✓ "
 
 ---@param lnum0 integer 0-indexed source line
 ---@return string
@@ -74,23 +90,27 @@ local function lnum_label(lnum0)
   return ("%4d"):format(lnum0 + 1)
 end
 
-local BLANK_LNUM = "    "
+--- The accent-bar highlight for an accept/conflict state.
+---@param accepted boolean
+---@param has_conflict boolean
+---@return string
+local function bar_hl_for(accepted, has_conflict)
+  if has_conflict then
+    return "RenamePreviewBarConflict"
+  end
+  return accepted and "RenamePreviewBarAccepted" or "RenamePreviewBarRejected"
+end
 
---- Append the rendered before/after hunk for one site.
+--- Append the rendered before/after hunk for one site, with a state accent bar,
+--- an accept marker, and a right-aligned role label.
 ---@param state RenamePreview.UiState
 ---@param group RenamePreview.FileGroup
 ---@param site RenamePreview.Site
 local function render_site(state, group, site)
   local accepted = site.accepted
   local has_conflict = #site.conflicts > 0
-  local mark
-  if has_conflict then
-    mark = "⚠ "
-  elseif accepted then
-    mark = "● "
-  else
-    mark = "○ "
-  end
+  local bar_hl = bar_hl_for(accepted, has_conflict)
+  local mark = has_conflict and "!" or (accepted and "✓" or "·")
   local mark_hl = has_conflict and "RenamePreviewConflictSign"
     or (accepted and "RenamePreviewAccepted" or "RenamePreviewRejected")
 
@@ -105,18 +125,17 @@ local function render_site(state, group, site)
 
   -- Old (deleted) lines.
   for i, pl in ipairs(hunk.old) do
-    local label = (i == 1) and lnum_label(start_lnum) or BLANK_LNUM
+    local first = i == 1
     local segs = {
-      { text = (i == 1) and mark or "  ", hl = (i == 1) and mark_hl or nil },
-      { text = label, hl = "RenamePreviewLineNr" },
+      { text = BAR, hl = bar_hl },
+      { text = first and (" " .. mark .. " ") or MARK_FIELD, hl = first and mark_hl or nil },
+      { text = first and lnum_label(start_lnum) or BLANK_LNUM, hl = "RenamePreviewLineNr" },
       { text = GUTTER, hl = "RenamePreviewLineNr" },
       { text = "- ", hl = del_hl },
     }
-    -- Split the text so the changed span gets the stronger highlight.
     if pl.hl_start and pl.hl_end and pl.hl_end >= pl.hl_start then
       segs[#segs + 1] = { text = pl.text:sub(1, pl.hl_start), hl = del_hl, priority = 100 }
-      segs[#segs + 1] =
-        { text = pl.text:sub(pl.hl_start + 1, pl.hl_end), hl = del_text_hl, priority = 200 }
+      segs[#segs + 1] = { text = pl.text:sub(pl.hl_start + 1, pl.hl_end), hl = del_text_hl, priority = 200 }
       segs[#segs + 1] = { text = pl.text:sub(pl.hl_end + 1), hl = del_hl, priority = 100 }
     else
       segs[#segs + 1] = { text = pl.text, hl = del_hl, priority = 100 }
@@ -124,36 +143,87 @@ local function render_site(state, group, site)
     add_segments(state, segs, meta)
   end
 
-  -- New (added) lines, with the role label appended to the first one.
+  -- New (added) lines; the role label is pinned to the right edge of the first.
   local role_label = state.config.role_labels[site.role] or site.role
   for i, pl in ipairs(hunk.new) do
     local segs = {
-      { text = "  " },
+      { text = BAR, hl = bar_hl },
+      { text = MARK_FIELD },
       { text = BLANK_LNUM, hl = "RenamePreviewLineNr" },
       { text = GUTTER, hl = "RenamePreviewLineNr" },
       { text = "+ ", hl = add_hl },
     }
     if pl.hl_start and pl.hl_end and pl.hl_end >= pl.hl_start then
       segs[#segs + 1] = { text = pl.text:sub(1, pl.hl_start), hl = add_hl, priority = 100 }
-      segs[#segs + 1] =
-        { text = pl.text:sub(pl.hl_start + 1, pl.hl_end), hl = add_text_hl, priority = 200 }
+      segs[#segs + 1] = { text = pl.text:sub(pl.hl_start + 1, pl.hl_end), hl = add_text_hl, priority = 200 }
       segs[#segs + 1] = { text = pl.text:sub(pl.hl_end + 1), hl = add_hl, priority = 100 }
     else
       segs[#segs + 1] = { text = pl.text, hl = add_hl, priority = 100 }
     end
-    if i == #hunk.new then
-      segs[#segs + 1] = { text = "  [" .. role_label .. "]", hl = "RenamePreviewRole" }
+    local lnum = add_segments(state, segs, meta)
+    if i == 1 then
+      add_virt(state, lnum, { { "  " .. role_label .. " ", highlights.role_group(site.role) } })
     end
-    add_segments(state, segs, meta)
   end
 
   -- Site-level conflicts.
   for _, c in ipairs(site.conflicts) do
     add_segments(state, {
+      { text = BAR, hl = bar_hl },
       { text = "      " },
       { text = "⚠ " .. c.message, hl = "RenamePreviewConflict" },
     }, meta)
   end
+end
+
+--- Highlight every line belonging to the site (or file header) under the cursor
+--- so the active "card" stands out as you navigate.
+---@param state RenamePreview.UiState
+local function highlight_current(state)
+  if not vim.api.nvim_buf_is_valid(state.bufnr) or not vim.api.nvim_win_is_valid(state.winnr) then
+    return
+  end
+  vim.api.nvim_buf_clear_namespace(state.bufnr, NS_CURSOR, 0, -1)
+  local lnum = vim.api.nvim_win_get_cursor(state.winnr)[1] - 1
+  local meta = state.meta[lnum]
+  if not meta then
+    return
+  end
+
+  local target = {}
+  if meta.kind == "site" and meta.site then
+    for l, m in pairs(state.meta) do
+      if m.site == meta.site then
+        target[#target + 1] = l
+      end
+    end
+  elseif meta.kind == "file" and meta.group then
+    for l, m in pairs(state.meta) do
+      if m.kind == "file" and m.group == meta.group then
+        target[#target + 1] = l
+      end
+    end
+  else
+    target = { lnum }
+  end
+
+  for _, l in ipairs(target) do
+    pcall(vim.api.nvim_buf_set_extmark, state.bufnr, NS_CURSOR, l, 0, {
+      line_hl_group = "RenamePreviewCursorLine",
+      priority = 50,
+    })
+  end
+end
+
+--- Draw a full-width separator rule.
+---@param state RenamePreview.UiState
+---@param width integer
+local function add_rule(state, width)
+  local inner = math.max(0, width - 4)
+  add_segments(state, {
+    { text = "  " },
+    { text = ("─"):rep(inner), hl = "RenamePreviewSeparator" },
+  }, { kind = "blank" })
 end
 
 --- Rebuild the entire preview buffer from the session state.
@@ -167,26 +237,39 @@ local function render(state)
   local accepted, total = session_mod.accepted_count(session)
   local nconf = conflict.count(session)
   local nfiles = #session.files
+  local width = vim.api.nvim_win_is_valid(state.winnr) and vim.api.nvim_win_get_width(state.winnr) or 80
 
-  -- Title.
+  add_line(state, "")
+
+  -- Title: the transformation, large and central.
   add_segments(state, {
-    { text = "  Rename  " },
+    { text = "  " },
     { text = session.old_name, hl = "RenamePreviewOldName" },
-    { text = ARROW, hl = "RenamePreviewTitle" },
+    { text = ARROW, hl = "RenamePreviewArrow" },
     { text = session.new_name, hl = "RenamePreviewNewName" },
   }, { kind = "title" })
 
   -- Summary.
-  local conf_text = nconf == 1 and "1 conflict" or (nconf .. " conflicts")
+  local conf_text
+  if nconf == 0 then
+    conf_text = "no conflicts"
+  elseif nconf == 1 then
+    conf_text = "1 conflict"
+  else
+    conf_text = nconf .. " conflicts"
+  end
   local files_text = nfiles == 1 and "1 file" or (nfiles .. " files")
   add_segments(state, {
     { text = "  " },
-    { text = ("%d/%d sites"):format(accepted, total), hl = "RenamePreviewFileCount" },
-    { text = "  ·  ", hl = "RenamePreviewFileCount" },
+    { text = ("%d of %d sites"):format(accepted, total), hl = "RenamePreviewFileCount" },
+    { text = "  ·  ", hl = "RenamePreviewSeparator" },
     { text = files_text, hl = "RenamePreviewFileCount" },
-    { text = "  ·  ", hl = "RenamePreviewFileCount" },
+    { text = "  ·  ", hl = "RenamePreviewSeparator" },
     { text = conf_text, hl = nconf > 0 and "RenamePreviewConflict" or "RenamePreviewFileCount" },
   }, { kind = "summary" })
+
+  add_line(state, "")
+  add_rule(state, width)
   add_line(state, "")
 
   for _, group in ipairs(session.files) do
@@ -196,32 +279,57 @@ local function render(state)
         naccepted = naccepted + 1
       end
     end
-    local fold = group.collapsed and "▸" or "▾"
-    local box
-    if naccepted == #group.sites then
-      box = "[x]"
-    elseif naccepted == 0 then
-      box = "[ ]"
-    else
-      box = "[~]"
+    local group_conflict = #group.conflicts > 0
+    for _, s in ipairs(group.sites) do
+      if #s.conflicts > 0 then
+        group_conflict = true
+        break
+      end
     end
-    local count_text = (#group.sites == 1) and "1 site" or (#group.sites .. " sites")
-    local header = {
-      { text = " " .. fold .. " ", hl = "RenamePreviewFile" },
-      { text = box .. " ", hl = naccepted > 0 and "RenamePreviewAccepted" or "RenamePreviewRejected" },
-      { text = group.path, hl = "RenamePreviewFile" },
-      { text = "  " .. count_text, hl = "RenamePreviewFileCount" },
-    }
-    if #group.conflicts > 0 then
-      header[#header + 1] = { text = "  ⚠ " .. #group.conflicts, hl = "RenamePreviewConflict" }
-    end
-    add_segments(state, header, { kind = "file", group = group })
 
-    -- File-level conflicts (e.g. name collisions).
+    local fold = group.collapsed and "▸" or "▾"
+    local box, box_hl
+    if naccepted == #group.sites then
+      box, box_hl = "[x]", "RenamePreviewAccepted"
+    elseif naccepted == 0 then
+      box, box_hl = "[ ]", "RenamePreviewRejected"
+    else
+      box, box_hl = "[~]", "RenamePreviewBarPartial"
+    end
+
+    local header_bar
+    if group_conflict then
+      header_bar = "RenamePreviewBarConflict"
+    elseif naccepted == #group.sites then
+      header_bar = "RenamePreviewBarAccepted"
+    elseif naccepted == 0 then
+      header_bar = "RenamePreviewBarRejected"
+    else
+      header_bar = "RenamePreviewBarPartial"
+    end
+
+    local header_lnum = add_segments(state, {
+      { text = BAR, hl = header_bar },
+      { text = " " },
+      { text = box .. " ", hl = box_hl },
+      { text = fold .. " ", hl = "RenamePreviewFile" },
+      { text = group.path, hl = "RenamePreviewFile" },
+    }, { kind = "file", group = group })
+
+    -- Right-aligned count + conflict badge.
+    local count_text = (#group.sites == 1) and "1 site" or (#group.sites .. " sites")
+    local right = { { count_text .. " ", "RenamePreviewFileCount" } }
+    if #group.conflicts > 0 then
+      right[#right + 1] = { "⚠ " .. #group.conflicts .. " ", "RenamePreviewConflict" }
+    end
+    add_virt(state, header_lnum, right)
+
     if not group.collapsed then
+      -- File-level conflicts (e.g. name collisions).
       for _, c in ipairs(group.conflicts) do
         add_segments(state, {
-          { text = "     " },
+          { text = BAR, hl = header_bar },
+          { text = "    " },
           { text = "⚠ " .. c.message, hl = "RenamePreviewConflict" },
         }, { kind = "file", group = group })
       end
@@ -232,6 +340,8 @@ local function render(state)
     add_line(state, "")
   end
 
+  add_rule(state, width)
+
   -- Hint footer.
   local km = state.config.keymaps
   local function key(k)
@@ -240,17 +350,17 @@ local function render(state)
   add_segments(state, {
     { text = "  " },
     { text = key(km.toggle), hl = "RenamePreviewKey" },
-    { text = " toggle  ", hl = "RenamePreviewHint" },
+    { text = " toggle   ", hl = "RenamePreviewHint" },
     { text = key(km.accept_all), hl = "RenamePreviewKey" },
-    { text = " all  ", hl = "RenamePreviewHint" },
+    { text = " all   ", hl = "RenamePreviewHint" },
     { text = key(km.reject_all), hl = "RenamePreviewKey" },
-    { text = " none  ", hl = "RenamePreviewHint" },
+    { text = " none   ", hl = "RenamePreviewHint" },
     { text = key(km.jump), hl = "RenamePreviewKey" },
-    { text = " jump  ", hl = "RenamePreviewHint" },
+    { text = " jump   ", hl = "RenamePreviewHint" },
     { text = key(km.next_conflict), hl = "RenamePreviewKey" },
-    { text = " conflict  ", hl = "RenamePreviewHint" },
+    { text = " conflict   ", hl = "RenamePreviewHint" },
     { text = key(km.apply), hl = "RenamePreviewKey" },
-    { text = " apply  ", hl = "RenamePreviewHint" },
+    { text = " apply   ", hl = "RenamePreviewHint" },
     { text = key(km.cancel), hl = "RenamePreviewKey" },
     { text = " cancel", hl = "RenamePreviewHint" },
   }, { kind = "hint" })
@@ -262,12 +372,22 @@ local function render(state)
 
   vim.api.nvim_buf_clear_namespace(state.bufnr, NS, 0, -1)
   for _, m in ipairs(state.marks) do
-    pcall(vim.api.nvim_buf_set_extmark, state.bufnr, NS, m.line, m.col_start, {
-      end_col = m.col_end,
-      hl_group = m.hl,
-      priority = m.priority or 150,
-    })
+    if m.virt_text then
+      pcall(vim.api.nvim_buf_set_extmark, state.bufnr, NS, m.line, 0, {
+        virt_text = m.virt_text,
+        virt_text_pos = m.virt_text_pos or "right_align",
+        hl_mode = "combine",
+      })
+    else
+      pcall(vim.api.nvim_buf_set_extmark, state.bufnr, NS, m.line, m.col_start, {
+        end_col = m.col_end,
+        hl_group = m.hl,
+        priority = m.priority or 150,
+      })
+    end
   end
+
+  highlight_current(state)
 end
 
 --- The metadata for the line the cursor is on.
@@ -507,11 +627,14 @@ function M.open(session, origin_win, cfg)
     col = math.floor((cols - width) / 2),
     style = "minimal",
     border = cfg.border,
-    title = " rename-preview ",
+    title = { { "  rename-preview  ", "RenamePreviewTitle" } },
     title_pos = "center",
   })
   vim.wo[winnr].wrap = false
-  vim.wo[winnr].cursorline = true
+  -- The active site is highlighted as a whole "card" by highlight_current, so
+  -- the built-in single-line cursorline is left off.
+  vim.wo[winnr].cursorline = false
+  vim.wo[winnr].winhighlight = "Normal:NormalFloat,FloatBorder:FloatBorder"
 
   local state = {
     session = session,
@@ -554,6 +677,15 @@ function M.open(session, origin_win, cfg)
     close(state)
   end, "Cancel")
 
+  vim.api.nvim_create_autocmd("CursorMoved", {
+    buffer = bufnr,
+    callback = function()
+      if states[bufnr] then
+        highlight_current(state)
+      end
+    end,
+  })
+
   vim.api.nvim_create_autocmd("WinClosed", {
     pattern = tostring(winnr),
     once = true,
@@ -566,11 +698,15 @@ function M.open(session, origin_win, cfg)
 
   render(state)
   -- Place the cursor on the first file header for immediate interaction.
+  local first_file
   for lnum, meta in pairs(state.meta) do
-    if meta.kind == "file" then
-      pcall(vim.api.nvim_win_set_cursor, winnr, { lnum + 1, 0 })
-      break
+    if meta.kind == "file" and (not first_file or lnum < first_file) then
+      first_file = lnum
     end
+  end
+  if first_file then
+    pcall(vim.api.nvim_win_set_cursor, winnr, { first_file + 1, 0 })
+    highlight_current(state)
   end
 end
 

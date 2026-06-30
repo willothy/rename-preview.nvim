@@ -172,21 +172,39 @@ they follow your colour scheme. Override any after `setup()`.
     RenamePreviewTitle          Window/section titles.
     RenamePreviewOldName        The old name in the header.
     RenamePreviewNewName        The new name in the header.
+    RenamePreviewArrow          The arrow between the names.
+    RenamePreviewSeparator      Horizontal rules and dot separators.
     RenamePreviewFile           File paths and fold markers.
-    RenamePreviewFileCount      Counts and separators.
+    RenamePreviewFileCount      Counts.
     RenamePreviewLineNr         Line numbers and gutters.
     RenamePreviewAdd            Added (new) lines.
     RenamePreviewDelete         Removed (old) lines.
     RenamePreviewAddText        The changed span on an added line.
     RenamePreviewDeleteText     The changed span on a removed line.
-    RenamePreviewRole           Role labels.
     RenamePreviewConflict       Conflict messages.
     RenamePreviewConflictSign   The conflict marker on a site.
     RenamePreviewAccepted       Accepted-state markers.
-    RenamePreviewRejected       Rejected (dimmed) sites.
-    RenamePreviewRejectedText   Changed span on a rejected site.
+    RenamePreviewRejected       Rejected (dimmed) markers and text.
+    RenamePreviewRejectedText   Struck-through diff text on a rejected site.
     RenamePreviewHint           Footer hint text.
     RenamePreviewKey            Footer key names.
+    RenamePreviewCursorLine     Background of the site under the cursor.
+
+The state accent bar down the left edge of each card:
+
+    RenamePreviewBarAccepted    Every site in the card is accepted.
+    RenamePreviewBarRejected    No site in the card is accepted.
+    RenamePreviewBarPartial     Some sites accepted, some not.
+    RenamePreviewBarConflict    The card carries a conflict.
+
+The semantic role labels (see |rename-preview-roles|):
+
+    RenamePreviewRoleDefinition
+    RenamePreviewRoleDeclaration
+    RenamePreviewRoleCall
+    RenamePreviewRoleWrite
+    RenamePreviewRoleRead
+    RenamePreviewRoleReference
 
 ==============================================================================
 10. LUA API                                             *rename-preview-api*
