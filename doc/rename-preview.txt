@@ -1,0 +1,202 @@
+*rename-preview.txt*        Safe symbol rename UX with a full preview
+
+==============================================================================
+CONTENTS                                                  *rename-preview*
+
+    1. Introduction ......................... |rename-preview-introduction|
+    2. Requirements ......................... |rename-preview-requirements|
+    3. Setup ................................ |rename-preview-setup|
+    4. Commands ............................. |rename-preview-commands|
+    5. Mappings ............................. |rename-preview-mappings|
+    6. Configuration ........................ |rename-preview-config|
+    7. Conflicts ............................ |rename-preview-conflicts|
+    8. Roles ................................ |rename-preview-roles|
+    9. Highlights ........................... |rename-preview-highlights|
+    10. Lua API ............................. |rename-preview-api|
+
+==============================================================================
+1. INTRODUCTION                                *rename-preview-introduction*
+
+rename-preview.nvim inserts a review step into the LSP rename flow. Instead of
+applying a |vim.lsp.buf.rename()| edit immediately, it computes the full
+WorkspaceEdit, shows every affected site as an inline before/after diff grouped
+by file and semantic role, flags conflicts, and lets you accept or reject each
+rename site before anything is written.
+
+==============================================================================
+2. REQUIREMENTS                                *rename-preview-requirements*
+
+- Neovim 0.10 or newer.
+- A language server attached to the buffer that supports `textDocument/rename`.
+- Treesitter parsers are optional. When present they refine semantic role
+  detection (see |rename-preview-roles|); when absent, sites fall back to the
+  generic "reference" role.
+
+==============================================================================
+3. SETUP                                              *rename-preview-setup*
+
+Call the setup function once, typically in your config: >lua
+
+    require("rename-preview").setup()
+<
+`setup()` accepts an options table (see |rename-preview-config|) and registers
+the plugin's highlight groups. It is safe to call without arguments to accept
+all defaults.
+
+==============================================================================
+4. COMMANDS                                        *rename-preview-commands*
+
+                                                              *:RenamePreview*
+:RenamePreview [{newname}]
+        Start a rename preview for the symbol under the cursor. With no
+        argument you are prompted for the new name via |vim.ui.input()|. With
+        {newname} the prompt is skipped.
+
+==============================================================================
+5. MAPPINGS                                        *rename-preview-mappings*
+
+These keys are active inside the preview window. All are configurable through
+the `keymaps` option (|rename-preview-config|).
+
+    <Space>     Toggle accept/reject for the site under the cursor. On a file
+                header line, toggles every site in that file.
+    a           Accept all sites.
+    x           Reject all sites.
+    <Tab>       Collapse or expand the file under the cursor.
+    o           Preview the source location of the site under the cursor in the
+                window the rename was started from, without leaving the preview.
+    ]c          Move to the next conflicting site.
+    [c          Move to the previous conflicting site.
+    <CR>        Apply the accepted sites. If any accepted site still carries a
+                conflict you are asked to confirm.
+    q, <Esc>    Cancel and close the preview without changing anything.
+
+==============================================================================
+6. CONFIGURATION                                     *rename-preview-config*
+
+Defaults: >lua
+
+    require("rename-preview").setup({
+      border = "rounded",
+      width = 0.8,
+      height = 0.8,
+      auto_apply_no_conflicts = false,
+      detect_collisions = true,
+      role_labels = {
+        definition = "definition",
+        declaration = "declaration",
+        write = "write",
+        read = "read",
+        call = "call",
+        reference = "reference",
+      },
+      keymaps = {
+        toggle = "<Space>",
+        accept_all = "a",
+        reject_all = "x",
+        toggle_fold = "<Tab>",
+        jump = "o",
+        next_conflict = "]c",
+        prev_conflict = "[c",
+        apply = "<CR>",
+        cancel = { "q", "<Esc>" },
+      },
+      on_apply = nil,
+    })
+<
+Fields ~
+
+`border`        Border style passed to |nvim_open_win()|.
+`width`         Window width. A value <= 1 is a fraction of 'columns'; a larger
+                value is an absolute column count.
+`height`        Window height. A value <= 1 is a fraction of 'lines'; a larger
+                value is an absolute line count.
+`auto_apply_no_conflicts`
+                When true, a rename that produces exactly one site with no
+                conflicts is applied immediately without showing the preview.
+`detect_collisions`
+                When true (default), each edited file is scanned for existing
+                identifiers matching the new name and flagged as collisions.
+`role_labels`   Display labels for each semantic role.
+`keymaps`       Mappings active in the preview window. Each value may be a
+                single key string or a list of key strings.
+`on_apply`      Optional `function(session)` invoked after a successful apply.
+
+==============================================================================
+7. CONFLICTS                                       *rename-preview-conflicts*
+
+Three classes of conflict are detected and shown with a "⚠" marker:
+
+collision ~
+    The new name already exists as a distinct identifier in a file being
+    edited. The rename may shadow or merge with an unrelated symbol. Reported
+    per file. Disable with `detect_collisions = false`.
+
+overlap ~
+    Two edits produced by the language server touch overlapping ranges within
+    one file. Applying both would corrupt the buffer.
+
+stale ~
+    An edit points past the end of the file, or — checked again at apply time —
+    the text at the edit no longer matches what was captured when the preview
+    was built. Stale edits are skipped on apply and reported, never applied
+    blindly.
+
+Navigate conflicts with the `]c` and `[c` mappings.
+
+==============================================================================
+8. ROLES                                              *rename-preview-roles*
+
+Each rename site is labelled with a semantic role describing how the symbol is
+used there:
+
+    definition  The declaration/definition site, as reported by
+                `textDocument/definition`.
+    write       The symbol is the target of an assignment, a declaration, or a
+                parameter binding.
+    read        The symbol is read.
+    call        The symbol is the function being called.
+    reference   Fallback when no syntactic information is available (e.g. no
+                Treesitter parser).
+
+The definition signal always wins. The write/read/call distinction is derived
+from Treesitter and therefore depends on the available parser; it is a best
+effort and never affects which edits are applied.
+
+==============================================================================
+9. HIGHLIGHTS                                     *rename-preview-highlights*
+
+All groups are defined with `default = true` and link to a standard group, so
+they follow your colour scheme. Override any after `setup()`.
+
+    RenamePreviewTitle          Window/section titles.
+    RenamePreviewOldName        The old name in the header.
+    RenamePreviewNewName        The new name in the header.
+    RenamePreviewFile           File paths and fold markers.
+    RenamePreviewFileCount      Counts and separators.
+    RenamePreviewLineNr         Line numbers and gutters.
+    RenamePreviewAdd            Added (new) lines.
+    RenamePreviewDelete         Removed (old) lines.
+    RenamePreviewAddText        The changed span on an added line.
+    RenamePreviewDeleteText     The changed span on a removed line.
+    RenamePreviewRole           Role labels.
+    RenamePreviewConflict       Conflict messages.
+    RenamePreviewConflictSign   The conflict marker on a site.
+    RenamePreviewAccepted       Accepted-state markers.
+    RenamePreviewRejected       Rejected (dimmed) sites.
+    RenamePreviewRejectedText   Changed span on a rejected site.
+    RenamePreviewHint           Footer hint text.
+    RenamePreviewKey            Footer key names.
+
+==============================================================================
+10. LUA API                                             *rename-preview-api*
+
+require("rename-preview").setup({opts})                  *rename-preview.setup()*
+        Configure the plugin and register highlights. Returns the resolved
+        configuration table.
+
+require("rename-preview").rename({opts})                *rename-preview.rename()*
+        Start a rename preview at the cursor. {opts} may contain:
+            new_name  (string) Skip the input prompt and use this name.
+
+ vim:tw=78:ts=8:ft=help:norl:
