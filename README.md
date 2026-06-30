@@ -183,7 +183,7 @@ typed. The `icon` needs a Nerd Font; change it to taste.
 
 1. The symbol under the cursor is resolved via `textDocument/prepareRename`
    (falling back to a hand-written identifier scan), and its occurrence ranges
-   are cached once.
+   are fetched once.
 2. While you type, those ranges are overlaid with the current name through
    Neovim's [command preview](https://neovim.io/doc/user/map.html#%3Acommand-preview)
    — no language-server request per keystroke.

@@ -70,16 +70,36 @@ vim.api.nvim_win_set_cursor(winnr, { 1, 4 })
 local ctx, cerr = lsp.context(bufnr, winnr)
 check("context built", ctx ~= nil, cerr)
 
-local range, placeholder = lsp.prepare(ctx)
-check("prepare resolved range", range ~= nil)
-local old_name = placeholder or "add"
+-- Async prepareRename.
+local prange, old_name, prep_done
+lsp.prepare(ctx, function(r, name)
+  prange, old_name, prep_done = r, name, true
+end)
+vim.wait(5000, function()
+  return prep_done == true
+end, 25)
+check("prepare resolved range", prange ~= nil)
 check("old name resolved to add", old_name == "add", old_name)
 
-local we, rerr = lsp.rename(ctx, "sum")
+-- Async rename.
+local we, rerr, rename_done
+lsp.rename(ctx, "sum", function(edit, err)
+  we, rerr, rename_done = edit, err, true
+end)
+vim.wait(5000, function()
+  return rename_done == true
+end, 25)
 check("rename returned a workspace edit", we ~= nil, rerr)
 
-local defs = lsp.definition(ctx)
-check("definition returned", #defs >= 1, #defs)
+-- Async definition.
+local defs, def_done
+lsp.definition(ctx, function(locations)
+  defs, def_done = locations, true
+end)
+vim.wait(5000, function()
+  return def_done == true
+end, 25)
+check("definition returned", defs and #defs >= 1, defs and #defs)
 
 local session = session_mod.build({
   workspace_edit = we,

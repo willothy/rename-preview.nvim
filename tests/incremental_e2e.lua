@@ -57,8 +57,12 @@ end, 50)
 vim.api.nvim_win_set_cursor(winnr, { 1, 4 })
 
 -- pending is nil here, so confirm() takes the direct-invocation fallback:
--- resolve the symbol at the cursor and run the authoritative rename.
+-- resolve the symbol at the cursor and run the authoritative rename. The rename
+-- runs asynchronously, so wait for the edit to land.
 incremental.confirm({ args = "sum" })
+vim.wait(5000, function()
+  return vim.api.nvim_buf_get_lines(bufnr, 0, 1, false)[1] == "int sum(int a, int b) {"
+end, 25)
 
 local after = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 check("definition renamed", after[1] == "int sum(int a, int b) {", after[1])

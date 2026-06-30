@@ -7,7 +7,6 @@
 local config = require("rename-preview.config")
 local highlights = require("rename-preview.highlights")
 local lsp = require("rename-preview.lsp")
-local diff = require("rename-preview.diff")
 local execute = require("rename-preview.execute")
 local incremental = require("rename-preview.incremental")
 local util = require("rename-preview.util")
@@ -57,14 +56,13 @@ function M.rename(opts)
     return
   end
 
-  local range, placeholder, perr = lsp.prepare(ctx)
-  if not range then
-    util.notify(perr or "Could not resolve a symbol to rename", vim.log.levels.WARN)
-    return
-  end
-
-  local old_name = placeholder or diff.extract(ctx.bufnr, range, ctx.offset_encoding)
-  execute.run({ ctx = ctx, old_name = old_name, new_name = opts.new_name, origin_win = winnr })
+  lsp.prepare(ctx, function(range, old_name, perr)
+    if not range then
+      util.notify(perr or "Could not resolve a symbol to rename", vim.log.levels.WARN)
+      return
+    end
+    execute.run({ ctx = ctx, old_name = old_name, new_name = opts.new_name, origin_win = winnr })
+  end)
 end
 
 return M

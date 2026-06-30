@@ -9,7 +9,6 @@
 --- pipeline (see |rename-preview.execute|).
 
 local lsp = require("rename-preview.lsp")
-local diff = require("rename-preview.diff")
 local execute = require("rename-preview.execute")
 local util = require("rename-preview.util")
 
@@ -61,30 +60,32 @@ function M.ranges_from_edit(workspace_edit)
   return by_uri
 end
 
---- Resolve the occurrence ranges for the symbol. A no-op rename
+--- Resolve the occurrence ranges for the symbol asynchronously, delivering them
+--- to `callback` (or nil when none are found). A no-op rename
 --- (`rename(old_name)`) is the primary source so the previewed ranges match the
 --- edit that will actually be applied; references are a fallback for servers
---- that decline a same-name rename.
+--- that decline a same-name rename. Being async, this never blocks the editor
+--- while the server is still starting up.
 ---@param ctx RenamePreview.LspContext
 ---@param old_name string
----@return table<string, lsp.Range[]>|nil ranges
-local function collect_ranges(ctx, old_name)
-  local workspace_edit = lsp.rename(ctx, old_name)
-  local ranges = M.ranges_from_edit(workspace_edit)
-  if next(ranges) then
-    return ranges
-  end
+---@param callback fun(ranges: table<string, lsp.Range[]>|nil)
+local function collect_ranges(ctx, old_name, callback)
+  lsp.rename(ctx, old_name, function(workspace_edit)
+    local ranges = M.ranges_from_edit(workspace_edit)
+    if next(ranges) then
+      callback(ranges)
+      return
+    end
 
-  local by_uri = {}
-  for _, loc in ipairs(lsp.references(ctx, true)) do
-    by_uri[loc.uri] = by_uri[loc.uri] or {}
-    by_uri[loc.uri][#by_uri[loc.uri] + 1] = loc.range
-  end
-  if next(by_uri) then
-    return by_uri
-  end
-
-  return nil
+    lsp.references(ctx, true, function(locations)
+      local by_uri = {}
+      for _, loc in ipairs(locations) do
+        by_uri[loc.uri] = by_uri[loc.uri] or {}
+        by_uri[loc.uri][#by_uri[loc.uri] + 1] = loc.range
+      end
+      callback(next(by_uri) and by_uri or nil)
+    end)
+  end)
 end
 
 --- Split `s` into a prefix whose display width does not exceed `width` and the
@@ -245,7 +246,7 @@ function M.confirm(opts)
     return
   end
 
-  -- Direct `:RenamePreviewInc name` invocation without a cached session.
+  -- Direct `:RenamePreview name` invocation without a cached session.
   local bufnr = vim.api.nvim_get_current_buf()
   local winnr = vim.api.nvim_get_current_win()
   local ctx, err = lsp.context(bufnr, winnr)
@@ -253,26 +254,31 @@ function M.confirm(opts)
     util.notify(err or "Rename unavailable here", vim.log.levels.WARN)
     return
   end
-  local range, placeholder, perr = lsp.prepare(ctx)
-  if not range then
-    util.notify(perr or "Could not resolve a symbol to rename", vim.log.levels.WARN)
-    return
-  end
-  local old_name = placeholder or diff.extract(ctx.bufnr, range, ctx.offset_encoding)
-  if new_name == "" or new_name == old_name then
-    return
-  end
-  execute.run({
-    ctx = ctx,
-    old_name = old_name,
-    new_name = new_name,
-    origin_win = winnr,
-  })
+  lsp.prepare(ctx, function(range, old_name, perr)
+    if not range then
+      util.notify(perr or "Could not resolve a symbol to rename", vim.log.levels.WARN)
+      return
+    end
+    if new_name == "" or new_name == old_name then
+      return
+    end
+    execute.run({
+      ctx = ctx,
+      old_name = old_name,
+      new_name = new_name,
+      origin_win = winnr,
+    })
+  end)
 end
 
---- Start an incremental rename: resolve and cache the symbol's occurrences, then
---- drop into the command line pre-filled with the current name so the live
---- preview tracks each keystroke.
+--- Start an incremental rename: resolve the symbol, fetch and cache its
+--- occurrences asynchronously, then drop into the command line pre-filled with
+--- the current name so the live preview tracks each keystroke.
+---
+--- Every server round-trip here is asynchronous, so triggering a rename never
+--- freezes the editor — even when the language server is still starting up. The
+--- command line opens once the symbol and its ranges are ready (instantly in the
+--- common case).
 function M.start()
   M.cleanup()
 
@@ -285,44 +291,45 @@ function M.start()
     return
   end
 
-  local range, placeholder, perr = lsp.prepare(ctx)
-  if not range then
-    util.notify(perr or "Could not resolve a symbol to rename", vim.log.levels.WARN)
-    return
-  end
-  local old_name = placeholder or diff.extract(ctx.bufnr, range, ctx.offset_encoding)
+  lsp.prepare(ctx, function(range, old_name, perr)
+    if not range then
+      util.notify(perr or "Could not resolve a symbol to rename", vim.log.levels.WARN)
+      return
+    end
 
-  local ranges_by_uri = collect_ranges(ctx, old_name)
-  if not ranges_by_uri then
-    util.notify("Rename is not available for this symbol", vim.log.levels.WARN)
-    return
-  end
-
-  pending = {
-    ctx = ctx,
-    old_name = old_name,
-    origin_win = winnr,
-    ranges_by_uri = ranges_by_uri,
-    saved_inccommand = vim.o.inccommand,
-  }
-
-  -- Command preview requires 'inccommand' to be enabled.
-  if vim.o.inccommand == "" then
-    vim.o.inccommand = "nosplit"
-  end
-
-  -- Clean up if the user aborts the command line (e.g. <Esc>) instead of
-  -- confirming; on confirm, M.confirm performs the cleanup itself.
-  vim.api.nvim_create_autocmd("CmdlineLeave", {
-    once = true,
-    callback = function()
-      if vim.v.event.abort then
-        M.cleanup()
+    collect_ranges(ctx, old_name, function(ranges_by_uri)
+      if not ranges_by_uri then
+        util.notify("Rename is not available for this symbol", vim.log.levels.WARN)
+        return
       end
-    end,
-  })
 
-  vim.api.nvim_feedkeys((":%s %s"):format(M.command, old_name), "n", false)
+      pending = {
+        ctx = ctx,
+        old_name = old_name,
+        origin_win = winnr,
+        ranges_by_uri = ranges_by_uri,
+        saved_inccommand = vim.o.inccommand,
+      }
+
+      -- Command preview requires 'inccommand' to be enabled.
+      if vim.o.inccommand == "" then
+        vim.o.inccommand = "nosplit"
+      end
+
+      -- Clean up if the user aborts the command line (e.g. <Esc>) instead of
+      -- confirming; on confirm, M.confirm performs the cleanup itself.
+      vim.api.nvim_create_autocmd("CmdlineLeave", {
+        once = true,
+        callback = function()
+          if vim.v.event.abort then
+            M.cleanup()
+          end
+        end,
+      })
+
+      vim.api.nvim_feedkeys((":%s %s"):format(M.command, old_name), "n", false)
+    end)
+  end)
 end
 
 return M

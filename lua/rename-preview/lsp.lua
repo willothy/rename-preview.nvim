@@ -65,81 +65,10 @@ function M.context(bufnr, winnr)
   }
 end
 
---- Synchronously issue an LSP request for a single client, returning the result
---- or an error. Uses `client:request` and waits on the response so the caller
---- can compose several requests sequentially without nesting callbacks.
----@param client vim.lsp.Client
----@param method string
----@param params table
----@param bufnr integer
----@param timeout_ms integer|nil
----@return any result, string|nil err
-local function request_sync(client, method, params, bufnr, timeout_ms)
-  local done, response, request_err
-  local ok, request_id = client:request(method, params, function(err, result)
-    request_err = err
-    response = result
-    done = true
-  end, bufnr)
-
-  if not ok then
-    return nil, ("Failed to send %s request"):format(method)
-  end
-
-  local completed = vim.wait(timeout_ms or 4000, function()
-    return done == true
-  end, 10)
-
-  if not completed then
-    if request_id then
-      client:cancel_request(request_id)
-    end
-    return nil, ("%s request timed out"):format(method)
-  end
-
-  if request_err then
-    return nil, request_err.message or ("%s request failed"):format(method)
-  end
-
-  return response, nil
-end
-
---- Resolve the symbol range and placeholder text via `textDocument/prepareRename`.
---- Servers may answer with a Range, a `{ range, placeholder }` table, or a
---- `{ defaultBehavior = true }` marker. When prepareRename is unsupported we
---- fall back to the identifier under the cursor.
----@param ctx RenamePreview.LspContext
----@return lsp.Range|nil range, string|nil placeholder, string|nil err
-function M.prepare(ctx)
-  local params = {
-    textDocument = { uri = vim.uri_from_bufnr(ctx.bufnr) },
-    position = ctx.position,
-  }
-
-  if ctx.client:supports_method("textDocument/prepareRename", ctx.bufnr) then
-    local result, err = request_sync(ctx.client, "textDocument/prepareRename", params, ctx.bufnr)
-    if err then
-      return nil, nil, err
-    end
-    if result then
-      -- { range, placeholder }
-      if result.placeholder then
-        return result.range, result.placeholder, nil
-      end
-      -- A bare Range.
-      if result.start and result["end"] then
-        return result, nil, nil
-      end
-      -- { defaultBehavior = true } → fall through to cursor-word resolution.
-    end
-  end
-
-  return M.cursor_symbol(ctx)
-end
-
---- Resolve the identifier under the cursor by manual token scanning. Used as a
---- placeholder/range fallback when prepareRename is unavailable. No regex is
---- used: we walk outward from the cursor over identifier bytes.
+--- Resolve the identifier under the cursor by manual token scanning. This is
+--- how the new name is pre-filled and how `old_name` is determined; it never
+--- touches the language server, so it cannot block. No regex is used: we walk
+--- outward from the cursor over identifier bytes.
 ---@param ctx RenamePreview.LspContext
 ---@return lsp.Range|nil range, string|nil placeholder, string|nil err
 function M.cursor_symbol(ctx)
@@ -184,61 +113,137 @@ function M.cursor_symbol(ctx)
   return range, word, nil
 end
 
---- Request the rename WorkspaceEdit for a new name.
+--- Extract the buffer text covered by a single-line range (used to recover the
+--- old name when prepareRename returns a bare range without a placeholder).
+---@param ctx RenamePreview.LspContext
+---@param range lsp.Range
+---@return string
+local function range_text(ctx, range)
+  local line = util.buf_line(ctx.bufnr, range.start.line)
+  local s = util.char_to_byte(line, range.start.character, ctx.offset_encoding)
+  local e = util.char_to_byte(line, range["end"].character, ctx.offset_encoding)
+  return line:sub(s + 1, e)
+end
+
+--- Resolve the symbol range and old name via `textDocument/prepareRename`
+--- (asynchronous, so it never blocks the editor). Servers may answer with a
+--- Range, a `{ range, placeholder }` table, or a `{ defaultBehavior = true }`
+--- marker; an explicit error means the position is not renameable. When
+--- prepareRename is unsupported or declines, we fall back to the identifier
+--- under the cursor.
+---@param ctx RenamePreview.LspContext
+---@param callback fun(range: lsp.Range|nil, old_name: string|nil, err: string|nil)
+function M.prepare(ctx, callback)
+  if not ctx.client:supports_method("textDocument/prepareRename", ctx.bufnr) then
+    callback(M.cursor_symbol(ctx))
+    return
+  end
+
+  local params = {
+    textDocument = { uri = vim.uri_from_bufnr(ctx.bufnr) },
+    position = ctx.position,
+  }
+  local ok = ctx.client:request("textDocument/prepareRename", params, function(err, result)
+    if err then
+      callback(nil, nil, err.message or "Cannot rename the symbol under the cursor")
+      return
+    end
+    if result then
+      -- { range, placeholder }
+      if result.placeholder then
+        callback(result.range, result.placeholder, nil)
+        return
+      end
+      -- A bare Range: recover the name from the buffer.
+      if result.start and result["end"] then
+        callback(result, range_text(ctx, result), nil)
+        return
+      end
+      -- { defaultBehavior = true } → fall through to the cursor scan.
+    end
+    callback(M.cursor_symbol(ctx))
+  end, ctx.bufnr)
+  if not ok then
+    callback(M.cursor_symbol(ctx))
+  end
+end
+
+--- Request the rename WorkspaceEdit for a new name. Asynchronous: the result is
+--- delivered to `callback` so triggering a rename never blocks the editor, even
+--- while the server is still starting up.
 ---@param ctx RenamePreview.LspContext
 ---@param new_name string
----@return lsp.WorkspaceEdit|nil edit, string|nil err
-function M.rename(ctx, new_name)
+---@param callback fun(edit: lsp.WorkspaceEdit|nil, err: string|nil)
+function M.rename(ctx, new_name, callback)
   local params = {
     textDocument = { uri = vim.uri_from_bufnr(ctx.bufnr) },
     position = ctx.position,
     newName = new_name,
   }
-  local result, err = request_sync(ctx.client, "textDocument/rename", params, ctx.bufnr)
-  if err then
-    return nil, err
+  local ok = ctx.client:request("textDocument/rename", params, function(err, result)
+    if err then
+      callback(nil, err.message or "Rename request failed")
+    elseif not result then
+      callback(nil, "Language server returned no edits for this rename")
+    else
+      callback(result, nil)
+    end
+  end, ctx.bufnr)
+  if not ok then
+    callback(nil, "Failed to send rename request")
   end
-  if not result then
-    return nil, "Language server returned no edits for this rename"
-  end
-  return result, nil
 end
 
---- Request all references for the symbol. Used as a fallback source of
+--- Request all references for the symbol (async). Used as a fallback source of
 --- occurrence ranges for the incremental preview when the server does not
---- return edits for a no-op rename. Returns an empty list when unsupported.
+--- return edits for a no-op rename. Delivers an empty list when unsupported.
 ---@param ctx RenamePreview.LspContext
 ---@param include_declaration boolean
----@return lsp.Location[] locations
-function M.references(ctx, include_declaration)
+---@param callback fun(locations: lsp.Location[])
+function M.references(ctx, include_declaration, callback)
   if not ctx.client:supports_method("textDocument/references", ctx.bufnr) then
-    return {}
+    callback({})
+    return
   end
   local params = {
     textDocument = { uri = vim.uri_from_bufnr(ctx.bufnr) },
     position = ctx.position,
     context = { includeDeclaration = include_declaration },
   }
-  local result = request_sync(ctx.client, "textDocument/references", params, ctx.bufnr)
-  if type(result) ~= "table" then
-    return {}
+  local ok = ctx.client:request("textDocument/references", params, function(_, result)
+    callback(type(result) == "table" and result or {})
+  end, ctx.bufnr)
+  if not ok then
+    callback({})
   end
-  return result
 end
 
---- Request the definition location(s) for the symbol (used to mark the
+--- Request the definition location(s) for the symbol (async; used to mark the
 --- definition role). Normalises `Location`, `Location[]` and `LocationLink[]`.
 ---@param ctx RenamePreview.LspContext
----@return lsp.Location[] locations
-function M.definition(ctx)
+---@param callback fun(locations: lsp.Location[])
+function M.definition(ctx, callback)
   if not ctx.client:supports_method("textDocument/definition", ctx.bufnr) then
-    return {}
+    callback({})
+    return
   end
   local params = {
     textDocument = { uri = vim.uri_from_bufnr(ctx.bufnr) },
     position = ctx.position,
   }
-  local result = request_sync(ctx.client, "textDocument/definition", params, ctx.bufnr)
+  local ok = ctx.client:request("textDocument/definition", params, function(_, result)
+    callback(M.normalize_locations(result))
+  end, ctx.bufnr)
+  if not ok then
+    callback({})
+  end
+end
+
+--- Normalise a definition response (`Location`, `Location[]`, `LocationLink[]`,
+--- or nil) into a flat list of `{ uri, range }`.
+---@param result any
+---@return lsp.Location[]
+function M.normalize_locations(result)
   if not result then
     return {}
   end
