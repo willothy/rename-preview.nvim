@@ -1,0 +1,41 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: nvim ${{ matrix.neovim }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        neovim: [stable, nightly]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clangd (for the LSP end-to-end tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clangd
+          clangd --version
+
+      - name: Install Neovim (${{ matrix.neovim }})
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: ${{ matrix.neovim }}
+
+      - name: Show versions
+        run: nvim --version
+
+      - name: Run test suite
+        run: tests/run.sh

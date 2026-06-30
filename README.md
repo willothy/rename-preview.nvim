@@ -1,5 +1,7 @@
 # rename-preview.nvim
 
+[![tests](https://github.com/willothy/rename-preview.nvim/actions/workflows/tests.yml/badge.svg)](https://github.com/willothy/rename-preview.nvim/actions/workflows/tests.yml)
+
 > Safe symbol rename for Neovim. See every affected call site **before** you
 > commit to an LSP rename — then accept or reject each one.
 
