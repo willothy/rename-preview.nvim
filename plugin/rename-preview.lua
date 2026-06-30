@@ -9,10 +9,20 @@ if vim.g.loaded_rename_preview then
 end
 vim.g.loaded_rename_preview = true
 
+-- A single command drives the whole rename. With no argument it launches the
+-- interactive flow (which re-enters this command pre-filled with the symbol);
+-- with an argument it confirms the rename. The `preview` callback renders the
+-- live, type-as-you-go preview via |command-preview|.
 vim.api.nvim_create_user_command("RenamePreview", function(opts)
-  local args = opts.fargs
-  require("rename-preview").rename({ new_name = args[1] })
+  if vim.trim(opts.args) == "" then
+    require("rename-preview").rename()
+  else
+    require("rename-preview.incremental").confirm(opts)
+  end
 end, {
   nargs = "?",
-  desc = "Preview and selectively apply an LSP rename",
+  preview = function(opts, ns, _preview_buf)
+    return require("rename-preview.incremental").preview(opts, ns)
+  end,
+  desc = "Rename the symbol under the cursor with a live, reviewable preview",
 })

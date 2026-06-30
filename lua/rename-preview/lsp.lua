@@ -204,6 +204,28 @@ function M.rename(ctx, new_name)
   return result, nil
 end
 
+--- Request all references for the symbol. Used as a fallback source of
+--- occurrence ranges for the incremental preview when the server does not
+--- return edits for a no-op rename. Returns an empty list when unsupported.
+---@param ctx RenamePreview.LspContext
+---@param include_declaration boolean
+---@return lsp.Location[] locations
+function M.references(ctx, include_declaration)
+  if not ctx.client:supports_method("textDocument/references", ctx.bufnr) then
+    return {}
+  end
+  local params = {
+    textDocument = { uri = vim.uri_from_bufnr(ctx.bufnr) },
+    position = ctx.position,
+    context = { includeDeclaration = include_declaration },
+  }
+  local result = request_sync(ctx.client, "textDocument/references", params, ctx.bufnr)
+  if type(result) ~= "table" then
+    return {}
+  end
+  return result
+end
+
 --- Request the definition location(s) for the symbol (used to mark the
 --- definition role). Normalises `Location`, `Location[]` and `LocationLink[]`.
 ---@param ctx RenamePreview.LspContext

@@ -8,11 +8,12 @@ CONTENTS                                                  *rename-preview*
     3. Setup ................................ |rename-preview-setup|
     4. Commands ............................. |rename-preview-commands|
     5. Mappings ............................. |rename-preview-mappings|
-    6. Configuration ........................ |rename-preview-config|
-    7. Conflicts ............................ |rename-preview-conflicts|
-    8. Roles ................................ |rename-preview-roles|
-    9. Highlights ........................... |rename-preview-highlights|
-    10. Lua API ............................. |rename-preview-api|
+    6. Incremental rename ................... |rename-preview-incremental|
+    7. Configuration ........................ |rename-preview-config|
+    8. Conflicts ............................ |rename-preview-conflicts|
+    9. Roles ................................ |rename-preview-roles|
+    10. Highlights .......................... |rename-preview-highlights|
+    11. Lua API ............................. |rename-preview-api|
 
 ==============================================================================
 1. INTRODUCTION                                *rename-preview-introduction*
@@ -48,9 +49,11 @@ all defaults.
 
                                                               *:RenamePreview*
 :RenamePreview [{newname}]
-        Start a rename preview for the symbol under the cursor. With no
-        argument you are prompted for the new name via |vim.ui.input()|. With
-        {newname} the prompt is skipped.
+        Rename the symbol under the cursor. With no argument it starts the
+        interactive rename: the command line opens pre-filled with the current
+        name and every affected site is previewed live as you type
+        (|rename-preview-incremental|). With {newname} the rename runs straight
+        away. This is the single command behind the whole flow.
 
 ==============================================================================
 5. MAPPINGS                                        *rename-preview-mappings*
@@ -73,7 +76,37 @@ configurable through the `keymaps` option (|rename-preview-config|).
     q, <Esc>    Cancel and close the preview without changing anything.
 
 ==============================================================================
-6. CONFIGURATION                                     *rename-preview-config*
+6. INCREMENTAL RENAME                           *rename-preview-incremental*
+
+The interactive rename (|:RenamePreview| with no argument, or
+|rename-preview.rename()|) previews every affected site *as you type the new
+name*, in the spirit of inc-rename.nvim. Map it like so: >lua
+
+    vim.keymap.set("n", "<leader>rn", require("rename-preview").rename)
+<
+Triggering it opens the command line pre-filled with the symbol. As you
+edit the name, every occurrence visible in a window is overlaid live with the
+new text (highlighted with |hl-Substitute| by default). Press <CR> to confirm
+or <Esc> to cancel.
+
+The occurrence ranges are resolved once when the rename starts — they do not
+depend on the replacement text — so no language-server request is made per
+keystroke. On confirm an authoritative rename is requested for the final name
+and run through the normal pipeline.
+
+What confirming does is controlled by the `review` option:
+
+    true   (default) Open the review window (|rename-preview|) so you can still
+           curate sites and inspect conflicts before applying.
+    false  Apply immediately, like inc-rename.nvim.
+
+This feature uses Neovim's |command-preview| mechanism, which requires
+'inccommand' to be enabled. rename-preview enables it automatically for the
+duration of the command if it is off, and an occurrence is overlaid only while
+its file is displayed in a window.
+
+==============================================================================
+7. CONFIGURATION                                     *rename-preview-config*
 
 Defaults: >lua
 
@@ -81,6 +114,7 @@ Defaults: >lua
       border = "rounded",
       width = 0.8,
       height = 0.8,
+      review = true,
       auto_apply_no_conflicts = false,
       detect_collisions = true,
       role_labels = {
@@ -116,6 +150,8 @@ Fields ~
                 never exceeds this; taller content scrolls while the footer
                 keymap hints stay visible. A value <= 1 is a fraction of
                 'lines'; a larger value is an absolute line count.
+`review`        When true (default), confirming the interactive rename opens the
+                review window. When false, the rename is applied immediately.
 `auto_apply_no_conflicts`
                 When true, a rename that produces exactly one site with no
                 conflicts is applied immediately without showing the preview.
@@ -128,7 +164,7 @@ Fields ~
 `on_apply`      Optional `function(session)` invoked after a successful apply.
 
 ==============================================================================
-7. CONFLICTS                                       *rename-preview-conflicts*
+8. CONFLICTS                                       *rename-preview-conflicts*
 
 Three classes of conflict are detected and shown with a "⚠" marker:
 
@@ -150,7 +186,7 @@ stale ~
 Navigate conflicts with the `]c` and `[c` mappings.
 
 ==============================================================================
-8. ROLES                                              *rename-preview-roles*
+9. ROLES                                              *rename-preview-roles*
 
 Each rename site is labelled with a semantic role describing how the symbol is
 used there:
@@ -169,7 +205,7 @@ from Treesitter and therefore depends on the available parser; it is a best
 effort and never affects which edits are applied.
 
 ==============================================================================
-9. HIGHLIGHTS                                     *rename-preview-highlights*
+10. HIGHLIGHTS                                    *rename-preview-highlights*
 
 All groups are defined with `default = true` and link to a standard group, so
 they follow your colour scheme. Override any after `setup()`.
@@ -202,6 +238,9 @@ The state accent bar down the left edge of each card:
     RenamePreviewBarPartial     Some sites accepted, some not.
     RenamePreviewBarConflict    The card carries a conflict.
 
+    RenamePreviewIncNew         The new name overlaid live during an
+                                incremental rename (links to |hl-Substitute|).
+
 The semantic role labels (see |rename-preview-roles|):
 
     RenamePreviewRoleDefinition
@@ -212,14 +251,17 @@ The semantic role labels (see |rename-preview-roles|):
     RenamePreviewRoleReference
 
 ==============================================================================
-10. LUA API                                             *rename-preview-api*
+11. LUA API                                             *rename-preview-api*
 
 require("rename-preview").setup({opts})                  *rename-preview.setup()*
         Configure the plugin and register highlights. Returns the resolved
         configuration table.
 
 require("rename-preview").rename({opts})                *rename-preview.rename()*
-        Start a rename preview at the cursor. {opts} may contain:
-            new_name  (string) Skip the input prompt and use this name.
+        Rename the symbol under the cursor. With no {opts} this starts the
+        interactive rename with a live preview (|rename-preview-incremental|).
+        {opts} may contain:
+            new_name  (string) Skip the interactive step and rename to this
+                      name straight away.
 
  vim:tw=78:ts=8:ft=help:norl:

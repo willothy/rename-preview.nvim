@@ -7,11 +7,9 @@
 local config = require("rename-preview.config")
 local highlights = require("rename-preview.highlights")
 local lsp = require("rename-preview.lsp")
-local session_mod = require("rename-preview.session")
-local conflict = require("rename-preview.conflict")
-local apply_mod = require("rename-preview.apply")
 local diff = require("rename-preview.diff")
-local ui = require("rename-preview.ui")
+local execute = require("rename-preview.execute")
+local incremental = require("rename-preview.incremental")
 local util = require("rename-preview.util")
 
 local M = {}
@@ -31,54 +29,25 @@ function M.setup(opts)
   return cfg
 end
 
---- Build the session and either auto-apply (when configured and unambiguous) or
---- open the preview window.
----@param ctx RenamePreview.LspContext
----@param old_name string
----@param new_name string
----@param origin_win integer
-local function run_preview(ctx, old_name, new_name, origin_win)
-  local workspace_edit, err = lsp.rename(ctx, new_name)
-  if not workspace_edit then
-    util.notify(err or "Rename failed", vim.log.levels.ERROR)
-    return
-  end
-
-  local definitions = lsp.definition(ctx)
-  local session, serr = session_mod.build({
-    workspace_edit = workspace_edit,
-    old_name = old_name,
-    new_name = new_name,
-    offset_encoding = ctx.offset_encoding,
-    client_id = ctx.client.id,
-    definitions = definitions,
-    config = config.options,
-  })
-  if not session then
-    util.notify(serr or "Nothing to rename", vim.log.levels.WARN)
-    return
-  end
-
-  local _, total = session_mod.accepted_count(session)
-  if config.options.auto_apply_no_conflicts and total == 1 and conflict.count(session) == 0 then
-    local result = apply_mod.apply(session)
-    util.notify(
-      ("Renamed to `%s`: %d edit(s) across %d file(s)"):format(new_name, result.applied, result.files),
-      vim.log.levels.INFO
-    )
-    if config.options.on_apply then
-      pcall(config.options.on_apply, session)
-    end
-    return
-  end
-
-  ui.open(session, origin_win, config.options)
-end
-
---- Start a rename preview at the cursor.
----@param opts {new_name?: string}|nil When `new_name` is given the input prompt is skipped.
+--- Rename the symbol under the cursor.
+---
+--- With no `new_name`, this drives the interactive rename: the command line
+--- opens pre-filled with the current name and every affected site is previewed
+--- live as you type (see |rename-preview-incremental|). On confirm the rename is
+--- run to completion — opening the review window or applying directly per the
+--- `review` option.
+---
+--- With `new_name`, the interactive step is skipped and the rename runs straight
+--- away (useful for scripting).
+---@param opts {new_name?: string}|nil
 function M.rename(opts)
   opts = opts or {}
+
+  if not opts.new_name then
+    incremental.start()
+    return
+  end
+
   local bufnr = vim.api.nvim_get_current_buf()
   local winnr = vim.api.nvim_get_current_win()
 
@@ -95,18 +64,7 @@ function M.rename(opts)
   end
 
   local old_name = placeholder or diff.extract(ctx.bufnr, range, ctx.offset_encoding)
-
-  if opts.new_name then
-    run_preview(ctx, old_name, opts.new_name, winnr)
-    return
-  end
-
-  vim.ui.input({ prompt = "New name: ", default = old_name }, function(input)
-    if not input or input == "" or input == old_name then
-      return
-    end
-    run_preview(ctx, old_name, input, winnr)
-  end)
+  execute.run({ ctx = ctx, old_name = old_name, new_name = opts.new_name, origin_win = winnr })
 end
 
 return M

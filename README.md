@@ -11,6 +11,9 @@ is changed.
 
 ## Features
 
+- **Live, type-as-you-go preview** — every affected site updates in place as you
+  type the new name on the command line, à la inc-rename.nvim. Confirm to open
+  the review window, or apply straight away.
 - **Changed-files list** — every file the rename touches, with per-file counts
   and a fold to collapse the noise.
 - **Inline diff preview** — a precise before/after for each rename site, with
@@ -75,12 +78,20 @@ use({
 
 ## Usage
 
-- `:RenamePreview` — rename the symbol under the cursor (prompts for the new
-  name).
-- `:RenamePreview <newname>` — skip the prompt.
-- `require("rename-preview").rename()` — the Lua entry point; map it to a key.
+- `require("rename-preview").rename()` — the entry point; map it to a key.
+- `:RenamePreview` — same thing from the command line.
+- `:RenamePreview <newname>` — rename straight to `<newname>`, no typing step.
 
-Inside the preview window:
+Triggering a rename opens the command line pre-filled with the symbol under the
+cursor. As you type the new name, every affected site visible on screen is
+overlaid live with the result. Press `<CR>` to confirm — which opens the review
+window below (or applies immediately when `review = false`) — or `<Esc>` to
+cancel.
+
+> Requires Neovim's `'inccommand'` to be enabled for the live preview; it is the
+> default, and the plugin turns it on for the duration of the rename if needed.
+
+Inside the review window:
 
 | Key       | Action                                   |
 | --------- | ---------------------------------------- |
@@ -104,6 +115,7 @@ require("rename-preview").setup({
   border = "rounded",          -- any nvim_open_win border value
   width = 0.8,                  -- fraction of columns (<=1) or absolute count
   height = 0.8,                 -- fraction of lines (<=1) or absolute count
+  review = true,               -- on confirm: open the review window (false = apply now)
   auto_apply_no_conflicts = false, -- skip the UI for a single conflict-free site
   detect_collisions = true,    -- scan files for pre-existing uses of the new name
   role_labels = {              -- relabel the semantic roles however you like
@@ -143,13 +155,18 @@ See `:help rename-preview-highlights` for the full list.
 ## How it works
 
 1. The symbol under the cursor is resolved via `textDocument/prepareRename`
-   (falling back to a hand-written identifier scan).
-2. `textDocument/rename` computes the full `WorkspaceEdit` — but it is **not**
-   applied.
-3. `textDocument/definition` and Treesitter are used to label each edit with a
+   (falling back to a hand-written identifier scan), and its occurrence ranges
+   are cached once.
+2. While you type, those ranges are overlaid with the current name through
+   Neovim's [command preview](https://neovim.io/doc/user/map.html#%3Acommand-preview)
+   — no language-server request per keystroke.
+3. On confirm, `textDocument/rename` computes the full authoritative
+   `WorkspaceEdit` — but it is **not** applied.
+4. `textDocument/definition` and Treesitter are used to label each edit with a
    semantic role.
-4. Conflicts are computed across the edit set.
-5. You review and curate the edits; only the accepted subset is applied, with a
+5. Conflicts are detected across the edit set — name collisions, overlapping
+   server edits, and stale edits.
+6. You review and curate the edits; only the accepted subset is applied, with a
    final staleness re-check so a buffer that changed during review can never be
    silently corrupted.
 

@@ -99,4 +99,32 @@ function M.apply_resource_ops(ops, encoding)
   end
 end
 
+--- Apply the accepted sites, report the outcome to the user, and run the
+--- `on_apply` callback. Shared by the review window and the direct-apply paths.
+---@param session RenamePreview.Session
+---@param cfg RenamePreview.Config
+---@return RenamePreview.ApplyResult
+function M.commit(session, cfg)
+  local result = M.apply(session)
+
+  local msg = ("Renamed to `%s`: %d edit(s) across %d file(s)"):format(
+    session.new_name,
+    result.applied,
+    result.files
+  )
+  if result.skipped > 0 then
+    msg = msg
+      .. ("\nSkipped %d stale edit(s):\n  %s"):format(result.skipped, table.concat(result.skipped_detail, "\n  "))
+    util.notify(msg, vim.log.levels.WARN)
+  else
+    util.notify(msg, vim.log.levels.INFO)
+  end
+
+  if cfg.on_apply then
+    pcall(cfg.on_apply, session)
+  end
+
+  return result
+end
+
 return M

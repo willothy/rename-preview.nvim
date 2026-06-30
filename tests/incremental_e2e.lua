@@ -1,0 +1,75 @@
+-- End-to-end test for the incremental confirm path through a real server.
+-- Drives incremental.confirm() with on_confirm = "apply" so the rename is
+-- applied without opening the review window, then checks the buffer changed.
+local failures = 0
+local function check(name, cond, detail)
+  if cond then
+    print("ok   - " .. name)
+  else
+    failures = failures + 1
+    print("FAIL - " .. name .. (detail and ("  (" .. tostring(detail) .. ")") or ""))
+  end
+end
+
+if vim.fn.executable("clangd") == 0 then
+  print("ok   - (skipped: clangd not available)")
+  vim.cmd("qa!")
+  return
+end
+
+require("rename-preview").setup({ review = false })
+local incremental = require("rename-preview.incremental")
+
+local dir = vim.fn.tempname()
+vim.fn.mkdir(dir, "p")
+local file = dir .. "/main.c"
+vim.fn.writefile({
+  "int add(int a, int b) {",
+  "    return a + b;",
+  "}",
+  "",
+  "int main(void) {",
+  "    return add(add(1, 2), 3);",
+  "}",
+}, file)
+
+vim.cmd.edit(file)
+local bufnr = vim.api.nvim_get_current_buf()
+local winnr = vim.api.nvim_get_current_win()
+vim.bo[bufnr].filetype = "c"
+
+local client_id = vim.lsp.start({
+  name = "clangd",
+  cmd = { "clangd", "--background-index=false" },
+  root_dir = dir,
+}, { bufnr = bufnr })
+check("clangd started", client_id ~= nil)
+
+local client = vim.lsp.get_client_by_id(client_id)
+vim.wait(15000, function()
+  return client and client.initialized and client:supports_method("textDocument/rename", bufnr)
+end, 50)
+vim.wait(2000, function()
+  return false
+end, 50)
+
+-- Cursor on `add` in the definition.
+vim.api.nvim_win_set_cursor(winnr, { 1, 4 })
+
+-- pending is nil here, so confirm() takes the direct-invocation fallback:
+-- resolve the symbol at the cursor and run the authoritative rename.
+incremental.confirm({ args = "sum" })
+
+local after = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+check("definition renamed", after[1] == "int sum(int a, int b) {", after[1])
+check("nested calls renamed", after[6] == "    return sum(sum(1, 2), 3);", after[6])
+
+client:stop(true)
+vim.fn.delete(dir, "rf")
+
+print(string.format("\n%d failures", failures))
+if failures > 0 then
+  vim.cmd("cq")
+else
+  vim.cmd("qa!")
+end

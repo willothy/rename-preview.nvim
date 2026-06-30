@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 status=0
-for t in tests/integration.lua tests/roles_conflicts.lua tests/lsp_e2e.lua; do
+for t in tests/integration.lua tests/roles_conflicts.lua tests/incremental.lua tests/lsp_e2e.lua tests/incremental_e2e.lua; do
   echo "==> $t"
   if ! nvim --headless --noplugin -u NONE -c "set rtp+=." -c "luafile $t"; then
     status=1

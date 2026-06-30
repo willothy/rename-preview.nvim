@@ -26,6 +26,9 @@ M.groups = {
   RenamePreviewKey = { link = "Special" },
   RenamePreviewCursorLine = { link = "CursorLine" },
 
+  -- The new name overlaid live during an incremental rename.
+  RenamePreviewIncNew = { link = "Substitute" },
+
   -- State accent bar shown down the left edge of each card.
   RenamePreviewBarAccepted = { link = "DiagnosticOk" },
   RenamePreviewBarRejected = { link = "NonText" },

@@ -673,26 +673,7 @@ local function action_apply(state)
 
   local cfg = state.config
   close(state)
-  local result = apply_mod.apply(session)
-
-  local msg = ("Renamed to `%s`: %d edit(s) across %d file(s)"):format(
-    session.new_name,
-    result.applied,
-    result.files
-  )
-  if result.skipped > 0 then
-    msg = msg .. ("\nSkipped %d stale edit(s):\n  %s"):format(
-      result.skipped,
-      table.concat(result.skipped_detail, "\n  ")
-    )
-    util.notify(msg, vim.log.levels.WARN)
-  else
-    util.notify(msg, vim.log.levels.INFO)
-  end
-
-  if cfg.on_apply then
-    pcall(cfg.on_apply, session)
-  end
+  apply_mod.commit(session, cfg)
 end
 
 --- Register a keymap that may be a single lhs or a list of lhs.

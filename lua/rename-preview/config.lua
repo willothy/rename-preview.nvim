@@ -17,6 +17,7 @@ local M = {}
 ---@field border string|string[]      Border style for the preview window.
 ---@field width number                Fractional (<=1) or absolute window width.
 ---@field height number               Fractional (<=1) or absolute window height.
+---@field review boolean              Open the review window on confirm; when false, apply immediately.
 ---@field auto_apply_no_conflicts boolean Skip the preview when there is a single site and no conflicts.
 ---@field detect_collisions boolean    Run name-collision conflict detection.
 ---@field role_labels table<string,string> Display labels per semantic role.
@@ -28,6 +29,7 @@ local defaults = {
   border = "rounded",
   width = 0.8,
   height = 0.8,
+  review = true,
   auto_apply_no_conflicts = false,
   detect_collisions = true,
   role_labels = {
