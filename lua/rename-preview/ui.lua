@@ -26,6 +26,8 @@ local NS_CURSOR = vim.api.nvim_create_namespace("rename_preview_cursor")
 ---@field winnr integer
 ---@field origin_win integer
 ---@field config RenamePreview.Config
+---@field footer_width integer        Display width of the footer hint.
+---@field win_base table              Base float config reused when resizing.
 ---@field lines string[]
 ---@field meta table<integer, table>  0-indexed line → target metadata.
 ---@field marks table[]               Pending extmark specs.
@@ -215,15 +217,124 @@ local function highlight_current(state)
   end
 end
 
---- Draw a full-width separator rule.
+--- Emit an empty placeholder line for a separator rule and return its index.
+--- The rule text is filled in once the final window width is known (see
+--- `render`), so the rule always spans the fitted width exactly.
+---@param state RenamePreview.UiState
+---@return integer lnum
+local function add_rule_placeholder(state)
+  return add_line(state, "", { kind = "blank" })
+end
+
+--- Fill a previously reserved rule line so it spans `width` display columns.
+---@param state RenamePreview.UiState
+---@param lnum integer
+---@param width integer
+local function fill_rule(state, lnum, width)
+  local inner = math.max(0, width - 4)
+  state.lines[lnum + 1] = "  " .. ("─"):rep(inner)
+  state.marks[#state.marks + 1] = {
+    line = lnum,
+    col_start = 2,
+    col_end = 2 + inner * #("─"),
+    hl = "RenamePreviewSeparator",
+  }
+end
+
+--- Build the footer hint as a list of `{ text, hl }` chunks for the window
+--- border, plus its display width. Living on the border keeps the keymaps
+--- visible even when the buffer scrolls.
+---@param cfg RenamePreview.Config
+---@return table[] chunks, integer width
+local function footer_chunks(cfg)
+  local km = cfg.keymaps
+  local function key(k)
+    return type(k) == "table" and k[1] or k
+  end
+  local items = {
+    { key(km.toggle), "toggle" },
+    { key(km.accept_all) .. "/" .. key(km.reject_all), "all/none" },
+    { key(km.jump), "jump" },
+    { key(km.next_conflict), "conflict" },
+    { key(km.apply), "apply" },
+    { key(km.cancel), "quit" },
+  }
+  local chunks = { { " ", "RenamePreviewHint" } }
+  for i, item in ipairs(items) do
+    chunks[#chunks + 1] = { item[1], "RenamePreviewKey" }
+    chunks[#chunks + 1] = { " " .. item[2], "RenamePreviewHint" }
+    if i < #items then
+      chunks[#chunks + 1] = { " · ", "RenamePreviewSeparator" }
+    end
+  end
+  chunks[#chunks + 1] = { " ", "RenamePreviewHint" }
+
+  local width = 0
+  for _, c in ipairs(chunks) do
+    width = width + vim.fn.strdisplaywidth(c[1])
+  end
+  return chunks, width
+end
+
+--- Resolve the maximum window size from the config, where a fractional value is
+--- a proportion of the editor and a value above one is an absolute cell count.
+---@param cfg RenamePreview.Config
+---@return integer max_width, integer max_height
+local function compute_maxes(cfg)
+  local cols, rows = vim.o.columns, vim.o.lines
+  local max_width = cfg.width <= 1 and math.floor(cols * cfg.width) or math.floor(cfg.width)
+  local max_height = cfg.height <= 1 and math.floor(rows * cfg.height) or math.floor(cfg.height)
+  max_width = math.max(24, math.min(max_width, cols - 2))
+  max_height = math.max(3, math.min(max_height, rows - 2))
+  return max_width, max_height
+end
+
+--- The natural content size: the widest line (counting right-aligned virtual
+--- text and a small gap) and the total line count.
+---@param state RenamePreview.UiState
+---@return integer width, integer height
+local function content_dimensions(state)
+  local virt_w = {}
+  for _, m in ipairs(state.marks) do
+    if m.virt_text then
+      local w = 0
+      for _, c in ipairs(m.virt_text) do
+        w = w + vim.fn.strdisplaywidth(c[1])
+      end
+      virt_w[m.line] = (virt_w[m.line] or 0) + w
+    end
+  end
+
+  local maxw = 0
+  for i, line in ipairs(state.lines) do
+    local lnum = i - 1
+    local w = vim.fn.strdisplaywidth(line)
+    if virt_w[lnum] then
+      -- Two-column gap so left content and the right-aligned label never touch.
+      w = w + virt_w[lnum] + 2
+    end
+    if w > maxw then
+      maxw = w
+    end
+  end
+  return maxw, #state.lines
+end
+
+--- Resize and re-centre the window to the given content size, preserving the
+--- border, title and footer from the stored base config.
 ---@param state RenamePreview.UiState
 ---@param width integer
-local function add_rule(state, width)
-  local inner = math.max(0, width - 4)
-  add_segments(state, {
-    { text = "  " },
-    { text = ("─"):rep(inner), hl = "RenamePreviewSeparator" },
-  }, { kind = "blank" })
+---@param height integer
+local function resize(state, width, height)
+  if not vim.api.nvim_win_is_valid(state.winnr) then
+    return
+  end
+  local cfg = vim.deepcopy(state.win_base)
+  cfg.width = width
+  cfg.height = height
+  cfg.row = math.max(0, math.floor((vim.o.lines - (height + 2)) / 2))
+  cfg.col = math.max(0, math.floor((vim.o.columns - (width + 2)) / 2))
+  pcall(vim.api.nvim_win_set_config, state.winnr, cfg)
 end
 
 --- Rebuild the entire preview buffer from the session state.
@@ -237,7 +348,6 @@ local function render(state)
   local accepted, total = session_mod.accepted_count(session)
   local nconf = conflict.count(session)
   local nfiles = #session.files
-  local width = vim.api.nvim_win_is_valid(state.winnr) and vim.api.nvim_win_get_width(state.winnr) or 80
 
   add_line(state, "")
 
@@ -269,7 +379,7 @@ local function render(state)
   }, { kind = "summary" })
 
   add_line(state, "")
-  add_rule(state, width)
+  local rule_lnum = add_rule_placeholder(state)
   add_line(state, "")
 
   for _, group in ipairs(session.files) do
@@ -340,30 +450,24 @@ local function render(state)
     add_line(state, "")
   end
 
-  add_rule(state, width)
-
-  -- Hint footer.
-  local km = state.config.keymaps
-  local function key(k)
-    return type(k) == "table" and k[1] or k
+  -- Drop the trailing blank emitted after the final group so it does not show
+  -- as empty space at the bottom of the fitted window.
+  if state.lines[#state.lines] == "" then
+    state.meta[#state.lines - 1] = nil
+    state.lines[#state.lines] = nil
   end
-  add_segments(state, {
-    { text = "  " },
-    { text = key(km.toggle), hl = "RenamePreviewKey" },
-    { text = " toggle   ", hl = "RenamePreviewHint" },
-    { text = key(km.accept_all), hl = "RenamePreviewKey" },
-    { text = " all   ", hl = "RenamePreviewHint" },
-    { text = key(km.reject_all), hl = "RenamePreviewKey" },
-    { text = " none   ", hl = "RenamePreviewHint" },
-    { text = key(km.jump), hl = "RenamePreviewKey" },
-    { text = " jump   ", hl = "RenamePreviewHint" },
-    { text = key(km.next_conflict), hl = "RenamePreviewKey" },
-    { text = " conflict   ", hl = "RenamePreviewHint" },
-    { text = key(km.apply), hl = "RenamePreviewKey" },
-    { text = " apply   ", hl = "RenamePreviewHint" },
-    { text = key(km.cancel), hl = "RenamePreviewKey" },
-    { text = " cancel", hl = "RenamePreviewHint" },
-  }, { kind = "hint" })
+
+  -- Fit the window to the content, bounded by the configured maximums, and fill
+  -- the separator rule to the resolved width. The footer width acts as a floor
+  -- so the keymap hints on the border are never clipped (unless they exceed the
+  -- configured maximum width on a very narrow screen).
+  local max_width, max_height = compute_maxes(state.config)
+  local natural_w, natural_h = content_dimensions(state)
+  local win_w = math.min(max_width, math.max(natural_w, state.footer_width))
+  win_w = math.max(win_w, 24)
+  local win_h = math.max(1, math.min(max_height, natural_h))
+  fill_rule(state, rule_lnum, win_w)
+  resize(state, win_w, win_h)
 
   -- Commit to the buffer.
   vim.bo[state.bufnr].modifiable = true
@@ -614,22 +718,33 @@ function M.open(session, origin_win, cfg)
 
   local cols = vim.o.columns
   local rows = vim.o.lines
-  local width = cfg.width <= 1 and math.floor(cols * cfg.width) or math.floor(cfg.width)
-  local height = cfg.height <= 1 and math.floor(rows * cfg.height) or math.floor(cfg.height)
-  width = math.max(40, math.min(width, cols - 4))
-  height = math.max(10, math.min(height, rows - 4))
+  -- The configured width/height are treated as maximums; render fits the window
+  -- to its content within these bounds.
+  local max_width, max_height = compute_maxes(cfg)
 
-  local winnr = vim.api.nvim_open_win(bufnr, true, {
+  local footer, footer_width = footer_chunks(cfg)
+
+  local win_base = {
     relative = "editor",
-    width = width,
-    height = height,
-    row = math.floor((rows - height) / 2),
-    col = math.floor((cols - width) / 2),
     style = "minimal",
     border = cfg.border,
     title = { { "  rename-preview  ", "RenamePreviewTitle" } },
     title_pos = "center",
-  })
+    footer = footer,
+    footer_pos = "center",
+  }
+
+  -- Created at the maximum size; render immediately fits it to the content.
+  local winnr = vim.api.nvim_open_win(
+    bufnr,
+    true,
+    vim.tbl_extend("force", win_base, {
+      width = max_width,
+      height = max_height,
+      row = math.floor((rows - max_height) / 2),
+      col = math.floor((cols - max_width) / 2),
+    })
+  )
   vim.wo[winnr].wrap = false
   -- The active site is highlighted as a whole "card" by highlight_current, so
   -- the built-in single-line cursorline is left off.
@@ -642,6 +757,8 @@ function M.open(session, origin_win, cfg)
     winnr = winnr,
     origin_win = origin_win,
     config = cfg,
+    footer_width = footer_width,
+    win_base = win_base,
     lines = {},
     meta = {},
     marks = {},
@@ -683,6 +800,16 @@ function M.open(session, origin_win, cfg)
       if states[bufnr] then
         highlight_current(state)
       end
+    end,
+  })
+
+  -- Refit the window when the editor is resized while the preview is open.
+  vim.api.nvim_create_autocmd("VimResized", {
+    callback = function()
+      if not states[bufnr] then
+        return true -- preview gone: remove this autocmd
+      end
+      render(state)
     end,
   })
 

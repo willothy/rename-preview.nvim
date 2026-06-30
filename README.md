@@ -44,10 +44,12 @@ Rename a widely-used function and review the blast radius:
 │ ▌       │ +   return M.fetchUser(id)                        call   │
 │ ▌[x] ▾ src/handlers.lua                                    4 sites │
 │ ▌  ...                                                             │
-│  ────────────────────────────────────────────────────────────    │
-│  <Space> toggle  a all  x none  o jump  ]c conflict  ⏎ apply  q   │
-╰────────────────────────────────────────────────────────────────────╯
+╰─ <Space> toggle · a/x all/none · o jump · ]c conflict · ⏎ apply ──╯
 ```
+
+The window fits its content, growing only up to the configured `width`/`height`
+(see below); taller renames scroll while the keymap hints — pinned to the
+window footer — stay visible.
 
 The accent bar down the left edge is colour-coded per card — green when every
 site is accepted, dim when none are, amber when partial, red when a conflict is

@@ -55,8 +55,9 @@ all defaults.
 ==============================================================================
 5. MAPPINGS                                        *rename-preview-mappings*
 
-These keys are active inside the preview window. All are configurable through
-the `keymaps` option (|rename-preview-config|).
+These keys are active inside the preview window and are also shown in the
+window footer so they remain visible when the content scrolls. All are
+configurable through the `keymaps` option (|rename-preview-config|).
 
     <Space>     Toggle accept/reject for the site under the cursor. On a file
                 header line, toggles every site in that file.
@@ -106,11 +107,15 @@ Defaults: >lua
 <
 Fields ~
 
-`border`        Border style passed to |nvim_open_win()|.
-`width`         Window width. A value <= 1 is a fraction of 'columns'; a larger
-                value is an absolute column count.
-`height`        Window height. A value <= 1 is a fraction of 'lines'; a larger
-                value is an absolute line count.
+`border`        Border style passed to |nvim_open_win()|. A border is required
+                for the footer keymap hints to be visible.
+`width`         Maximum window width. The window is fitted to its content and
+                never exceeds this. A value <= 1 is a fraction of 'columns'; a
+                larger value is an absolute column count.
+`height`        Maximum window height. The window is fitted to its content and
+                never exceeds this; taller content scrolls while the footer
+                keymap hints stay visible. A value <= 1 is a fraction of
+                'lines'; a larger value is an absolute line count.
 `auto_apply_no_conflicts`
                 When true, a rename that produces exactly one site with no
                 conflicts is applied immediately without showing the preview.
