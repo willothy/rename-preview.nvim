@@ -116,7 +116,7 @@ require("rename-preview").setup({
   width = 0.8,                  -- fraction of columns (<=1) or absolute count
   height = 0.8,                 -- fraction of lines (<=1) or absolute count
   review = true,               -- on confirm: open the review window (false = apply now)
-  auto_apply_no_conflicts = false, -- skip the UI for a single conflict-free site
+  auto_apply_no_conflicts = false, -- when there are no conflicts, apply without the review window
   detect_collisions = true,    -- scan files for pre-existing uses of the new name
   role_labels = {              -- relabel the semantic roles however you like
     definition = "definition",

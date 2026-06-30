@@ -1,6 +1,6 @@
 -- End-to-end test for the incremental confirm path through a real server.
--- Drives incremental.confirm() with on_confirm = "apply" so the rename is
--- applied without opening the review window, then checks the buffer changed.
+-- Uses auto_apply_no_conflicts = true: a multi-site, conflict-free rename must
+-- apply directly without opening the review window.
 local failures = 0
 local function check(name, cond, detail)
   if cond then
@@ -17,7 +17,7 @@ if vim.fn.executable("clangd") == 0 then
   return
 end
 
-require("rename-preview").setup({ review = false })
+require("rename-preview").setup({ auto_apply_no_conflicts = true })
 local incremental = require("rename-preview.incremental")
 
 local dir = vim.fn.tempname()
@@ -67,6 +67,15 @@ end, 25)
 local after = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 check("definition renamed", after[1] == "int sum(int a, int b) {", after[1])
 check("nested calls renamed", after[6] == "    return sum(sum(1, 2), 3);", after[6])
+
+-- auto_apply_no_conflicts must skip the review window entirely.
+local preview_open = false
+for _, w in ipairs(vim.api.nvim_list_wins()) do
+  if vim.bo[vim.api.nvim_win_get_buf(w)].filetype == "rename-preview" then
+    preview_open = true
+  end
+end
+check("review window was not opened", not preview_open)
 
 client:stop(true)
 vim.fn.delete(dir, "rf")

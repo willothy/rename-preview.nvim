@@ -56,10 +56,10 @@ function M.run(opts)
         return
       end
 
-      -- Review mode: a single, conflict-free site may be applied without the
-      -- window when the user has opted into that shortcut.
-      local _, total = session_mod.accepted_count(session)
-      if config.options.auto_apply_no_conflicts and total == 1 and conflict.count(session) == 0 then
+      -- Review mode: when the user has opted in, a conflict-free rename is
+      -- applied directly without the review window (regardless of how many
+      -- sites it touches).
+      if config.options.auto_apply_no_conflicts and conflict.count(session) == 0 then
         apply_mod.commit(session, config.options)
         return
       end

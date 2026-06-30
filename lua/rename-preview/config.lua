@@ -18,7 +18,7 @@ local M = {}
 ---@field width number                Fractional (<=1) or absolute window width.
 ---@field height number               Fractional (<=1) or absolute window height.
 ---@field review boolean              Open the review window on confirm; when false, apply immediately.
----@field auto_apply_no_conflicts boolean Skip the preview when there is a single site and no conflicts.
+---@field auto_apply_no_conflicts boolean Apply directly (skip the review window) when the rename has no conflicts.
 ---@field detect_collisions boolean    Run name-collision conflict detection.
 ---@field role_labels table<string,string> Display labels per semantic role.
 ---@field keymaps RenamePreview.Keymaps

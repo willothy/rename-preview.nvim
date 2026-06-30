@@ -153,8 +153,9 @@ Fields ~
 `review`        When true (default), confirming the interactive rename opens the
                 review window. When false, the rename is applied immediately.
 `auto_apply_no_conflicts`
-                When true, a rename that produces exactly one site with no
-                conflicts is applied immediately without showing the preview.
+                When true, a conflict-free rename is applied immediately,
+                without showing the review window, however many sites it
+                touches. The window still appears when conflicts are detected.
 `detect_collisions`
                 When true (default), each edited file is scanned for existing
                 identifiers matching the new name and flagged as collisions.
