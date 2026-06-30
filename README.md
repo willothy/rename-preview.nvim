@@ -152,6 +152,35 @@ vim.api.nvim_set_hl(0, "RenamePreviewNewName", { fg = "#a6e3a1", bold = true })
 
 See `:help rename-preview-highlights` for the full list.
 
+### noice.nvim
+
+Because the interactive rename is driven by the `:RenamePreview` command, you can
+let [noice.nvim](https://github.com/folke/noice.nvim) render the typing stage as
+a floating input box at the cursor — the same treatment its `inc_rename` preset
+gives inc-rename.nvim. Add a `cmdline` format entry that matches the command:
+
+```lua
+require("noice").setup({
+  cmdline = {
+    format = {
+      rename_preview = {
+        pattern = "^:%s*RenamePreview%s+",
+        icon = "󰑕",
+        conceal = true, -- hide ":RenamePreview " so only the name shows
+        opts = {
+          relative = "cursor",
+          size = { min_width = 20 },
+          position = { row = -3, col = 0 },
+        },
+      },
+    },
+  },
+})
+```
+
+The live in-buffer preview is unaffected — noice only restyles where the name is
+typed. The `icon` needs a Nerd Font; change it to taste.
+
 ## How it works
 
 1. The symbol under the cursor is resolved via `textDocument/prepareRename`
